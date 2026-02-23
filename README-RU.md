@@ -1,8 +1,8 @@
-<p aling="center"><a href="https://github.com/eGamesAPI/remnawave-reverse-proxy">
+<p aling="center"><a href="https://github.com/trace0FF/remnawave-reverse-proxy">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="./media/logo.png" />
    <source media="(prefers-color-scheme: light)" srcset="./media/logo-black.png" />
-   <img alt="Remnawave Reverse Proxy" src="https://github.com/eGamesAPI/remnawave-reverse-proxy" />
+   <img alt="Remnawave Reverse Proxy" src="https://github.com/trace0FF/remnawave-reverse-proxy" />
  </picture>
 </a></p>
 
@@ -114,6 +114,112 @@
 
 ---
 
+## Каскадная настройка через меню скрипта (2 ноды)
+
+Этот раздел описывает, как настроить каскадную цепочку вручную через новый пункт меню скрипта:
+
+`Клиент -> 1-я нода -> 2-я нода -> Интернет`
+
+### Что должно быть готово заранее
+
+1. Скрипт уже установлен на **сервере панели**.
+2. В панели уже добавлены и подключены ноды (через стандартный функционал скрипта или вручную).
+3. У выбранных нод есть активные Config Profiles и active inbound.
+4. Имена нод в панели уникальные (это важно для выбора по имени).
+
+### Как запустить скрипт
+
+Если скрипт еще не запускали:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/trace0FF/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
+```
+
+Если скрипт уже установлен:
+
+```bash
+remnawave_reverse
+```
+
+или короткой командой:
+
+```bash
+rr
+```
+
+### Какие пункты меню выбрать
+
+1. В главном меню выберите:
+   1. `3. Управление панелью/нодой`
+2. В меню управления выберите:
+   1. `7. Настроить каскад из 2 нод (авто)`
+
+### Что скрипт спросит
+
+1. Подтверждение выполнения операции.
+2. Имя 1-й ноды (входная/entry).
+3. Имя 2-й ноды (выходная/egress).
+
+Важно:
+
+1. Ноды должны быть разными.
+2. Имя вводится точно как в панели.
+3. Если нода не найдена по имени, скрипт остановится с ошибкой.
+
+### Что скрипт сделает автоматически
+
+После выбора нод скрипт:
+
+1. Получит токен доступа к панели (через существующий механизм `get_panel_token`).
+2. Соберет уникальный суффикс цепочки из имен выбранных нод.
+3. Создаст или обновит bridge-squad с уникальным именем:
+   1. Формат: `SQ-BR-<SUFFIX>`
+4. Создаст или обновит service user с уникальным именем:
+   1. Формат: `svc_br_<suffix>`
+5. Сгенерирует новую пару Reality-ключей и `shortId` для этой цепочки.
+6. Обновит профиль 2-й ноды (egress):
+   1. inbound получит новую `privateKey`, `shortIds`, `serverNames`.
+7. Обновит профиль 1-й ноды (entry):
+   1. добавит/обновит outbound `OUT-<SUFFIX>-CASCADE`,
+   2. добавит routing rule: inbound 1-й ноды -> этот outbound,
+   3. выставит совместимый `flow: xtls-rprx-vision`,
+   4. выставит `realitySettings.password` (для совместимости с текущей сборкой).
+8. Перезапустит обе выбранные ноды.
+
+Что скрипт **не делает**:
+
+1. Не отключает прямые hosts.
+2. Не удаляет существующие цепочки.
+3. Не перезаписывает чужие каскадные outbound'ы с другими суффиксами.
+
+### Что проверить после выполнения
+
+1. В панели обе выбранные ноды в статусе `Online`.
+2. В профиле 1-й ноды появился `OUT-<SUFFIX>-CASCADE`.
+3. В профиле 1-й ноды добавлено routing правило на этот outbound.
+4. В профиле 2-й ноды обновился inbound Reality.
+5. У клиентского пользователя обновлена подписка в приложении.
+6. Подключение идет через host 1-й ноды, а внешний IP соответствует 2-й ноде.
+
+Пример проверки внешнего IP:
+
+```bash
+curl https://ifconfig.me/ip
+```
+
+### Типовые ошибки
+
+1. `Нода с указанным именем не найдена`
+   1. Проверьте точное имя ноды в панели.
+2. `У выбранной ноды отсутствует активный профиль или inbound`
+   1. Назначьте Config Profile и active inbound для этой ноды.
+3. Каскад создался, но трафик не идет
+   1. Обновите подписку в клиенте.
+   2. Переподключитесь.
+   3. Убедитесь, что клиент подключается к 1-й ноде цепочки.
+
+---
+
 ## Функции безопасности
 
 ### Защита доступа к панели
@@ -172,7 +278,7 @@ https://panel.example.com/auth/login?<SECRET_KEY>=<SECRET_KEY>
 
 Выполните следующую команду для начала установки:
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/trace0FF/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
 ```
 
 <p align="center">

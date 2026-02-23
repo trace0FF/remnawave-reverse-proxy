@@ -1,8 +1,8 @@
-<p aling="center"><a href="https://github.com/eGamesAPI/remnawave-reverse-proxy">
+<p aling="center"><a href="https://github.com/trace0FF/remnawave-reverse-proxy">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="./media/logo.png" />
    <source media="(prefers-color-scheme: light)" srcset="./media/logo-black.png" />
-   <img alt="Remnawave Reverse Proxy" src="https://github.com/eGamesAPI/remnawave-reverse-proxy" />
+   <img alt="Remnawave Reverse Proxy" src="https://github.com/trace0FF/remnawave-reverse-proxy" />
  </picture>
 </a></p>
 
@@ -114,6 +114,63 @@ The script supports two methods for obtaining SSL certificates:
 
 ---
 
+## Cascade Setup via Script Menu (2 nodes)
+
+You can configure a 2-node cascade directly from the script menu:
+
+`Client -> 1st node -> 2nd node -> Internet`
+
+### Run the script
+
+Fresh run:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/trace0FF/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
+```
+
+If already installed:
+
+```bash
+remnawave_reverse
+```
+
+or:
+
+```bash
+rr
+```
+
+### Menu path
+
+1. `3. Manage Panel/Node`
+2. `7. Configure 2-node cascade (automatic)`
+
+### Required input
+
+1. Confirm action.
+2. Enter **1st node name** (entry node).
+3. Enter **2nd node name** (egress node).
+
+Node names must exist in panel and be unique.
+
+### What the script does
+
+1. Reads panel nodes and validates selected names.
+2. Builds a unique chain suffix from selected node names.
+3. Creates/updates unique bridge entities:
+   1. Squad: `SQ-BR-<SUFFIX>`
+   2. Service user: `svc_br_<suffix>`
+4. Generates Reality keypair + shortId for this chain.
+5. Updates 2nd node inbound Reality settings.
+6. Updates 1st node profile:
+   1. Adds/updates `OUT-<SUFFIX>-CASCADE`
+   2. Adds routing rule from 1st inbound to that outbound
+7. Restarts both selected nodes.
+
+Direct hosts are not disabled automatically.
+
+---
+
 ## Security Features
 
 ### Panel Access Protection
@@ -172,7 +229,7 @@ The panel remains invisible without the correct authentication parameter.
 
 Execute the following command to begin installation:
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/eGamesAPI/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/trace0FF/remnawave-reverse-proxy/refs/heads/main/install_remnawave.sh)
 ```
 
 <p align="center">
