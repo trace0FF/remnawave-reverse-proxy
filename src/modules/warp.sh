@@ -10,6 +10,7 @@ manage_warp_native() {
     echo -e ""
     echo -e "${COLOR_YELLOW}3. ${LANG[WARP_ADD_CONFIG]}${COLOR_RESET}"
     echo -e "${COLOR_YELLOW}4. ${LANG[WARP_DELETE_WARP_SETTINGS]}${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}5. ${LANG[WARP_FULL_ROUTE]}${COLOR_RESET}"
     echo -e ""
     echo -e "${COLOR_YELLOW}0. ${LANG[EXIT]}${COLOR_RESET}"
     echo -e ""
@@ -48,16 +49,223 @@ manage_warp_native() {
             log_clear
             manage_warp_native
             ;;
+        5)
+            manage_warp_full_route
+            sleep 2
+            log_clear
+            manage_warp_native
+            ;;
         0)
             echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}"
             ;;
         *)
-            echo -e "${COLOR_RED}${LANG[EXTENSIONS_INVALID_CHOICE]}${COLOR_RESET}"
+            echo -e "${COLOR_RED}${LANG[WARP_INVALID_CHOICE]}${COLOR_RESET}"
             sleep 2
             log_clear
             manage_warp_native
             ;;
     esac
+}
+
+cleanup_warp_config_json() {
+    local config_json="$1"
+
+    echo "$config_json" | jq '
+        .outbounds = [(.outbounds // [])[] | select(.tag != "warp-out")]
+        | (.routing //= {})
+        | .routing.rules = [
+            (.routing.rules // [])[]
+            | select(
+                (.outboundTag // "") != "warp-out"
+                and (.balancerTag // "") != "warp-fallback"
+                and (.ruleTag // "") != "warp-full-route"
+            )
+        ]
+        | .routing.balancers = [(.routing.balancers // [])[] | select(.tag != "warp-fallback")]
+        | if has("observatory") and (.observatory | type == "object") then
+            .observatory.subjectSelector = [(.observatory.subjectSelector // [])[] | select(. != "warp-out")]
+            | if ((.observatory.subjectSelector // []) | length) == 0 then
+                del(.observatory)
+              else
+                .
+              end
+          else
+            .
+          end
+    '
+}
+
+select_warp_node_profile() {
+    local token="$1"
+    local domain_url="${2:-127.0.0.1:3000}"
+    local selection_prompt="${3:-${LANG[WARP_SELECT_CONFIG]}}"
+
+    local nodes_response
+    nodes_response=$(make_api_request "GET" "${domain_url}/api/nodes" "$token")
+    if [ -z "$nodes_response" ] || ! echo "$nodes_response" | jq -e '.response | type == "array"' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_NO_PANEL_NODES]}: Invalid response${COLOR_RESET}" >&2
+        return 1
+    fi
+
+    local nodes
+    nodes=$(echo "$nodes_response" | jq -r '
+        .response[]
+        | select(.isDisabled != true)
+        | select(.name and .configProfile.activeConfigProfileUuid and .configProfile.activeConfigProfileUuid != null)
+        | [.name, (.address // "-"), .configProfile.activeConfigProfileUuid]
+        | @tsv
+    ' 2>/dev/null)
+    if [ -z "$nodes" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_NO_PANEL_NODES]}${COLOR_RESET}" >&2
+        return 1
+    fi
+
+    echo -e ""
+    echo -e "${COLOR_YELLOW}${selection_prompt}${COLOR_RESET}" >&2
+    echo -e "" >&2
+
+    local i=1
+    declare -A profile_map
+    while IFS=$'\t' read -r name address profile_uuid; do
+        echo -e "${COLOR_YELLOW}$i. $name [$address]${COLOR_RESET}" >&2
+        profile_map[$i]="$profile_uuid"
+        ((i++))
+    done <<< "$nodes"
+
+    echo -e "" >&2
+    echo -e "${COLOR_YELLOW}0. ${LANG[EXIT]}${COLOR_RESET}" >&2
+    echo -e "" >&2
+
+    local config_option
+    reading "${LANG[WARP_PROMPT1]}" config_option
+
+    if [ "$config_option" = "0" ]; then
+        echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}" >&2
+        return 1
+    fi
+
+    if [ -z "${profile_map[$config_option]}" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_INVALID_CHOICE2]}${COLOR_RESET}" >&2
+        return 1
+    fi
+
+    echo "${profile_map[$config_option]}"
+}
+
+manage_warp_full_route() {
+    load_api_module
+
+    local domain_url="127.0.0.1:3000"
+
+    echo -e ""
+    echo -e "${COLOR_RED}${LANG[WARNING_LABEL]}${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}${LANG[WARP_CONFIRM_SERVER_PANEL]}${COLOR_RESET}"
+    echo -e ""
+    echo -e "${COLOR_GREEN}[?]${COLOR_RESET} ${COLOR_YELLOW}${LANG[CONFIRM_PROMPT]}${COLOR_RESET}"
+    read confirm
+    echo
+
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}"
+        return 0
+    fi
+
+    get_panel_token
+    token=$(cat "$TOKEN_FILE")
+
+    local selected_uuid
+    selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG_FULL_ROUTE]}") || return 1
+
+    local config_data
+    config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
+    if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
+        return 1
+    fi
+
+    local config_json
+    if echo "$config_data" | jq -e '.response.config' > /dev/null 2>&1; then
+        config_json=$(echo "$config_data" | jq -r '.response.config')
+    else
+        config_json=$(echo "$config_data" | jq -r '.config // ""')
+    fi
+
+    if [ -z "$config_json" ] || [ "$config_json" = "null" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: No config found in response${COLOR_RESET}"
+        return 1
+    fi
+
+    local inbound_tags
+    inbound_tags=$(echo "$config_json" | jq -c '[.inbounds[]?.tag | select(type == "string" and length > 0)] | unique')
+    if [ -z "$inbound_tags" ] || [ "$inbound_tags" = "[]" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_NO_INBOUNDS]}${COLOR_RESET}"
+        return 1
+    fi
+
+    config_json=$(cleanup_warp_config_json "$config_json")
+
+    local warp_outbound='{
+        "tag": "warp-out",
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIP"
+        },
+        "streamSettings": {
+            "sockopt": {
+                "interface": "warp",
+                "tcpFastOpen": true
+            }
+        }
+    }'
+
+    config_json=$(echo "$config_json" | jq \
+        --argjson warp_out "$warp_outbound" \
+        --argjson inbound_tags "$inbound_tags" '
+        (.outbounds //= [])
+        | (.routing //= {})
+        | (.routing.rules //= [])
+        | (.routing.balancers //= [])
+        | .outbounds += [$warp_out]
+        | .routing.balancers += [
+            {
+                "tag": "warp-fallback",
+                "selector": ["warp-out"],
+                "fallbackTag": "DIRECT",
+                "strategy": {
+                    "type": "random"
+                }
+            }
+        ]
+        | .routing.rules += [
+            {
+                "type": "field",
+                "inboundTag": $inbound_tags,
+                "balancerTag": "warp-fallback",
+                "ruleTag": "warp-full-route"
+            }
+        ]
+        | (.observatory //= {})
+        | (.observatory.subjectSelector //= [])
+        | .observatory.subjectSelector |= (. + ["warp-out"] | unique)
+        | .observatory.probeUrl = (.observatory.probeUrl // "https://connectivitycheck.gstatic.com/generate_204")
+        | .observatory.probeInterval = (.observatory.probeInterval // "10s")
+        | .observatory.enableConcurrency = (.observatory.enableConcurrency // false)
+    ' 2>/dev/null)
+
+    if [ -z "$config_json" ] || [ "$config_json" = "null" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Failed to build full-route config${COLOR_RESET}"
+        return 1
+    fi
+
+    local update_response
+    update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "{\"uuid\": \"$selected_uuid\", \"config\": $config_json}")
+    if [ -z "$update_response" ] || ! echo "$update_response" | jq -e '.response.uuid' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
+        return 1
+    fi
+
+    echo -e "${COLOR_GREEN}${LANG[WARP_FULL_ROUTE_SUCCESS]}${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}${LANG[WARP_FULL_ROUTE_NOTE]}${COLOR_RESET}"
 }
 
 manage_warp_add_config() {
@@ -81,54 +289,8 @@ manage_warp_add_config() {
     get_panel_token
     token=$(cat "$TOKEN_FILE")
 
-    local config_response=$(make_api_request "GET" "${domain_url}/api/config-profiles" "$token")
-    if [ -z "$config_response" ] || ! echo "$config_response" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Invalid response${COLOR_RESET}"
-        return 1
-    fi
-
-    if ! echo "$config_response" | jq -e '.response.configProfiles | type == "array"' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Response does not contain configProfiles array${COLOR_RESET}"
-        return 1
-    fi
-
-    local config_count=$(echo "$config_response" | jq '.response.configProfiles | length')
-    if [ "$config_count" -eq 0 ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Empty configuration list${COLOR_RESET}"
-        return 1
-    fi
-    local configs=$(echo "$config_response" | jq -r '.response.configProfiles[] | select(.uuid and .name) | "\(.name) \(.uuid)"' 2>/dev/null)
-    if [ -z "$configs" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: No valid configurations found in response${COLOR_RESET}"
-        return 1
-    fi
-
-    echo -e ""
-    echo -e "${COLOR_YELLOW}${LANG[WARP_SELECT_CONFIG]}${COLOR_RESET}"
-    echo -e ""
-    local i=1
-    declare -A config_map
-    while IFS=' ' read -r name uuid; do
-        echo -e "${COLOR_YELLOW}$i. $name${COLOR_RESET}"
-        config_map[$i]="$uuid"
-        ((i++))
-    done <<< "$configs"
-    echo -e ""
-    echo -e "${COLOR_YELLOW}0. ${LANG[EXIT]}${COLOR_RESET}"
-    echo -e ""
-    reading "${LANG[WARP_PROMPT1]}" CONFIG_OPTION
-
-    if [ "$CONFIG_OPTION" == "0" ]; then
-        echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}"
-        return 0
-    fi
-
-    if [ -z "${config_map[$CONFIG_OPTION]}" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_INVALID_CHOICE2]}${COLOR_RESET}"
-        return 1
-    fi
-
-    local selected_uuid=${config_map[$CONFIG_OPTION]}
+    local selected_uuid
+    selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG]}") || return 1
 
     local config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
     if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
@@ -148,7 +310,26 @@ manage_warp_add_config() {
         return 1
     fi
 
-    if echo "$config_json" | jq -e '.outbounds[] | select(.tag == "warp-out")' > /dev/null 2>&1; then
+    config_json=$(echo "$config_json" | jq '
+        (.routing //= {})
+        | (.routing.rules //= [])
+        | .routing.rules = [.routing.rules[] | select((.ruleTag // "") != "warp-full-route" and (.balancerTag // "") != "warp-fallback")]
+        | .routing.balancers = [(.routing.balancers // [])[] | select(.tag != "warp-fallback")]
+        | if has("observatory") and (.observatory | type == "object") then
+            .observatory.subjectSelector = [(.observatory.subjectSelector // [])[] | select(. != "warp-out")]
+            | if ((.observatory.subjectSelector // []) | length) == 0 then
+                del(.observatory)
+              else
+                .
+              end
+          else
+            .
+          end
+    ' 2>/dev/null)
+
+    config_json=$(echo "$config_json" | jq '(.outbounds //= [])' 2>/dev/null)
+
+    if echo "$config_json" | jq -e '.outbounds[]? | select(.tag == "warp-out")' > /dev/null 2>&1; then
         echo -e "${COLOR_YELLOW}${LANG[WARP_WARNING]}${COLOR_RESET}"
     else
         local warp_outbound='{
@@ -167,7 +348,7 @@ manage_warp_add_config() {
         config_json=$(echo "$config_json" | jq --argjson warp_out "$warp_outbound" '.outbounds += [$warp_out]' 2>/dev/null)
     fi
 
-    if echo "$config_json" | jq -e '.routing.rules[] | select(.outboundTag == "warp-out")' > /dev/null 2>&1; then
+    if echo "$config_json" | jq -e '.routing.rules[]? | select(.outboundTag == "warp-out")' > /dev/null 2>&1; then
         echo -e "${COLOR_YELLOW}${LANG[WARP_WARNING2]}${COLOR_RESET}"
     else
         local warp_rule='{
@@ -208,55 +389,8 @@ manage_warp_delete_settings() {
     get_panel_token
     token=$(cat "$TOKEN_FILE")
 
-    local config_response=$(make_api_request "GET" "${domain_url}/api/config-profiles" "$token")
-    if [ -z "$config_response" ] || ! echo "$config_response" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Invalid response${COLOR_RESET}"
-        return 1
-    fi
-
-    if ! echo "$config_response" | jq -e '.response.configProfiles | type == "array"' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Response does not contain configProfiles array${COLOR_RESET}"
-        return 1
-    fi
-
-    local config_count=$(echo "$config_response" | jq '.response.configProfiles | length')
-    if [ "$config_count" -eq 0 ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Empty configuration list${COLOR_RESET}"
-        return 1
-    fi
-
-    local configs=$(echo "$config_response" | jq -r '.response.configProfiles[] | select(.uuid and .name) | "\(.name) \(.uuid)"' 2>/dev/null)
-    if [ -z "$configs" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: No valid configurations found in response${COLOR_RESET}"
-        return 1
-    fi
-
-    echo -e ""
-    echo -e "${COLOR_YELLOW}${LANG[WARP_SELECT_CONFIG_DELETE]}${COLOR_RESET}"
-    echo -e ""
-    local i=1
-    declare -A config_map
-    while IFS=' ' read -r name uuid; do
-        echo -e "${COLOR_YELLOW}$i. $name${COLOR_RESET}"
-        config_map[$i]="$uuid"
-        ((i++))
-    done <<< "$configs"
-    echo -e ""
-    echo -e "${COLOR_YELLOW}0. ${LANG[EXIT]}${COLOR_RESET}"
-    echo -e ""
-    reading "${LANG[WARP_PROMPT1]}" CONFIG_OPTION
-
-    if [ "$CONFIG_OPTION" == "0" ]; then
-        echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}"
-        return 0
-    fi
-
-    if [ -z "${config_map[$CONFIG_OPTION]}" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_INVALID_CHOICE2]}${COLOR_RESET}"
-        return 1
-    fi
-
-    local selected_uuid=${config_map[$CONFIG_OPTION]}
+    local selected_uuid
+    selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG_DELETE]}") || return 1
 
     local config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
     if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
@@ -276,18 +410,27 @@ manage_warp_delete_settings() {
         return 1
     fi
 
-    if echo "$config_json" | jq -e '.outbounds[] | select(.tag == "warp-out")' > /dev/null 2>&1; then
-        config_json=$(echo "$config_json" | jq 'del(.outbounds[] | select(.tag == "warp-out"))' 2>/dev/null)
+    local has_warp_outbound has_warp_rule has_warp_full_route
+    has_warp_outbound=$(echo "$config_json" | jq -e '.outbounds[]? | select(.tag == "warp-out")' > /dev/null 2>&1; echo $?)
+    has_warp_rule=$(echo "$config_json" | jq -e '.routing.rules[]? | select(.outboundTag == "warp-out")' > /dev/null 2>&1; echo $?)
+    has_warp_full_route=$(echo "$config_json" | jq -e '.routing.rules[]? | select((.balancerTag // "") == "warp-fallback" or (.ruleTag // "") == "warp-full-route")' > /dev/null 2>&1; echo $?)
+
+    config_json=$(cleanup_warp_config_json "$config_json")
+
+    if [ "$has_warp_outbound" -eq 0 ]; then
         echo -e "${COLOR_YELLOW}${LANG[WARP_REMOVED_WARP_SETTINGS1]}${COLOR_RESET}"
     else
         echo -e "${COLOR_YELLOW}${LANG[WARP_NO_WARP_SETTINGS1]}${COLOR_RESET}"
     fi
 
-    if echo "$config_json" | jq -e '.routing.rules[] | select(.outboundTag == "warp-out")' > /dev/null 2>&1; then
-        config_json=$(echo "$config_json" | jq 'del(.routing.rules[] | select(.outboundTag == "warp-out"))' 2>/dev/null)
+    if [ "$has_warp_rule" -eq 0 ]; then
         echo -e "${COLOR_YELLOW}${LANG[WARP_REMOVED_WARP_SETTINGS2]}${COLOR_RESET}"
     else
         echo -e "${COLOR_YELLOW}${LANG[WARP_NO_WARP_SETTINGS2]}${COLOR_RESET}"
+    fi
+
+    if [ "$has_warp_full_route" -eq 0 ]; then
+        echo -e "${COLOR_YELLOW}${LANG[WARP_REMOVED_FULL_ROUTE]}${COLOR_RESET}"
     fi
 
     local update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "{\"uuid\": \"$selected_uuid\", \"config\": $config_json}")
