@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="3.0.6"
+SCRIPT_VERSION="3.0.7"
 UPDATE_AVAILABLE=false
 DIR_REMNAWAVE="/usr/local/remnawave_reverse/"
 LANG_FILE="${DIR_REMNAWAVE}selected_language"
@@ -13,6 +13,8 @@ COLOR_YELLOW="\033[1;33m"
 COLOR_WHITE="\033[1;37m"
 COLOR_RED="\033[1;31m"
 COLOR_GRAY='\033[0;90m'
+
+RUNTIME_FORCE_UPDATE="false"
 
 # Download file with multiple mirrors and validation
 download_with_mirrors() {
@@ -106,12 +108,26 @@ validate_downloaded_file() {
     return 0
 }
 
+detect_runtime_force_update() {
+    local installed_script="${DIR_REMNAWAVE}remnawave_reverse"
+    local current_script installed_real
+
+    current_script=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+    installed_real=$(readlink -f "$installed_script" 2>/dev/null || printf '%s' "$installed_script")
+
+    if [ ! -f "$installed_script" ] || [ "$current_script" != "$installed_real" ]; then
+        RUNTIME_FORCE_UPDATE="true"
+    else
+        RUNTIME_FORCE_UPDATE="false"
+    fi
+}
+
 load_language() {
     if [ -f "$LANG_FILE" ]; then
         local saved_lang=$(cat "$LANG_FILE")
         case $saved_lang in
-            1) set_language en ;;
-            2) set_language ru ;;
+            1) set_language en "$RUNTIME_FORCE_UPDATE" ;;
+            2) set_language ru "$RUNTIME_FORCE_UPDATE" ;;
             *)
                 rm -f "$LANG_FILE"
                 return 1 ;;
@@ -2271,6 +2287,10 @@ load_module() {
     local module_url="https://raw.githubusercontent.com/trace0FF/remnawave-reverse-proxy/refs/heads/main/src/${module_type}/${module_name}.sh"
     local force_update="${3:-false}"
 
+    if [ "$RUNTIME_FORCE_UPDATE" = "true" ]; then
+        force_update="true"
+    fi
+
     if [ "$force_update" = "true" ] || [ ! -f "$module_file" ]; then
         mkdir -p "${DIR_REMNAWAVE}${module_type}"
 
@@ -2335,6 +2355,7 @@ load_ipv6_module() { load_module "ipv6" "modules" "${1:-false}"; }
 load_selfsteal_templates_module() { load_module "selfsteal_templates" "modules" "${1:-false}"; }
 
 log_entry
+detect_runtime_force_update
 
 if ! load_language; then
     show_language

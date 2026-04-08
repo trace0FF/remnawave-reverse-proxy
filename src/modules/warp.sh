@@ -172,11 +172,24 @@ select_warp_node_profile() {
         return 1
     fi
 
+    local config_profiles_response
+    config_profiles_response=$(make_api_request "GET" "${domain_url}/api/config-profiles" "$token")
+    if [ -z "$config_profiles_response" ] || ! echo "$config_profiles_response" | jq -e '.response.configProfiles | type == "array"' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_NO_CONFIGS]}: Invalid response${COLOR_RESET}" >&2
+        return 1
+    fi
+
+    local valid_profile_ids
+    valid_profile_ids=$(echo "$config_profiles_response" | jq -c '[.response.configProfiles[]?.uuid | select(type == "string" and length > 0)]')
+
     local nodes
-    nodes=$(echo "$nodes_response" | jq -r '
+    nodes=$(echo "$nodes_response" | jq -r --argjson valid_profile_ids "$valid_profile_ids" '
         .response[]
         | select(.isDisabled != true)
         | select(.name and .configProfile.activeConfigProfileUuid and .configProfile.activeConfigProfileUuid != null)
+        | select(.configProfile.activeInbounds | type == "array" and length > 0)
+        | .configProfile.activeConfigProfileUuid as $profile_uuid
+        | select($valid_profile_ids | index($profile_uuid))
         | [.name, (.address // "-"), .configProfile.activeConfigProfileUuid]
         | @tsv
     ' 2>/dev/null)
