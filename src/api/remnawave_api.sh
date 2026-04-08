@@ -6,19 +6,27 @@ make_api_request() {
     local url=$2
     local token=$3
     local data=$4
+    local request_url="$url"
+    local forward_host
+
+    if [[ ! "$request_url" =~ ^https?:// ]]; then
+        request_url="http://$request_url"
+    fi
+
+    forward_host=$(printf '%s' "$request_url" | sed -E 's#^[a-zA-Z]+://([^/]+).*$#\1#')
 
     local headers=(
         -H "Authorization: Bearer $token"
         -H "Content-Type: application/json"
-        -H "X-Forwarded-For: ${url#http://}"
+        -H "X-Forwarded-For: ${forward_host}"
         -H "X-Forwarded-Proto: https"
         -H "X-Remnawave-Client-Type: browser"
     )
 
     if [ -n "$data" ]; then
-        curl -s -X "$method" "$url" "${headers[@]}" -d "$data"
+        curl -s -X "$method" "$request_url" "${headers[@]}" -d "$data"
     else
-        curl -s -X "$method" "$url" "${headers[@]}"
+        curl -s -X "$method" "$request_url" "${headers[@]}"
     fi
 }
 

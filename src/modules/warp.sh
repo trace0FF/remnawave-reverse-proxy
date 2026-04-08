@@ -99,6 +99,74 @@ cleanup_warp_config_json() {
     '
 }
 
+fetch_warp_profile_config() {
+    local token="$1"
+    local profile_uuid="$2"
+    local domain_url="${3:-http://127.0.0.1:3000}"
+
+    local config_data
+    config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$profile_uuid" "$token")
+    if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
+        return 1
+    fi
+
+    if echo "$config_data" | jq -e '.response.config' > /dev/null 2>&1; then
+        echo "$config_data" | jq -c '.response.config'
+        return 0
+    fi
+
+    if echo "$config_data" | jq -e '.config' > /dev/null 2>&1; then
+        echo "$config_data" | jq -c '.config'
+        return 0
+    fi
+
+    return 1
+}
+
+build_warp_update_payload() {
+    local profile_uuid="$1"
+    local config_json="$2"
+
+    jq -cn --arg uuid "$profile_uuid" --argjson config "$config_json" '{uuid: $uuid, config: $config}'
+}
+
+extract_warp_api_error() {
+    local response="$1"
+
+    if [ -z "$response" ] || ! echo "$response" | jq -e '.' > /dev/null 2>&1; then
+        echo "Invalid response"
+        return 0
+    fi
+
+    echo "$response" | jq -r '
+        .message
+        // .error
+        // .response.message
+        // .response.error
+        // (.errors // empty | tostring)
+        // "Invalid response"
+    '
+}
+
+ensure_direct_outbound_json() {
+    local config_json="$1"
+
+    if echo "$config_json" | jq -e '.outbounds[]? | select(.tag == "DIRECT")' > /dev/null 2>&1; then
+        echo "$config_json"
+        return 0
+    fi
+
+    echo "$config_json" | jq '
+        (.outbounds //= [])
+        | .outbounds += [
+            {
+                "tag": "DIRECT",
+                "protocol": "freedom"
+            }
+        ]
+    '
+}
+
 ensure_warp_endpoint_connectivity() {
     local warp_conf="/etc/wireguard/warp.conf"
     local warp_service="wg-quick@warp"
@@ -162,7 +230,7 @@ ensure_warp_endpoint_connectivity() {
 
 select_warp_node_profile() {
     local token="$1"
-    local domain_url="${2:-127.0.0.1:3000}"
+    local domain_url="${2:-http://127.0.0.1:3000}"
     local selection_prompt="${3:-${LANG[WARP_SELECT_CONFIG]}}"
 
     local nodes_response
@@ -233,7 +301,7 @@ select_warp_node_profile() {
 manage_warp_full_route() {
     load_api_module
 
-    local domain_url="127.0.0.1:3000"
+    local domain_url="http://127.0.0.1:3000"
 
     echo -e ""
     echo -e "${COLOR_RED}${LANG[WARNING_LABEL]}${COLOR_RESET}"
@@ -254,22 +322,10 @@ manage_warp_full_route() {
     local selected_uuid
     selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG_FULL_ROUTE]}") || return 1
 
-    local config_data
-    config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
-    if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
-        return 1
-    fi
-
     local config_json
-    if echo "$config_data" | jq -e '.response.config' > /dev/null 2>&1; then
-        config_json=$(echo "$config_data" | jq -r '.response.config')
-    else
-        config_json=$(echo "$config_data" | jq -r '.config // ""')
-    fi
-
+    config_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
     if [ -z "$config_json" ] || [ "$config_json" = "null" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: No config found in response${COLOR_RESET}"
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Failed to load config profile${COLOR_RESET}"
         return 1
     fi
 
@@ -281,6 +337,7 @@ manage_warp_full_route() {
     fi
 
     config_json=$(cleanup_warp_config_json "$config_json")
+    config_json=$(ensure_direct_outbound_json "$config_json")
 
     local warp_outbound='{
         "tag": "warp-out",
@@ -335,10 +392,15 @@ manage_warp_full_route() {
         return 1
     fi
 
-    local update_response
-    update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "{\"uuid\": \"$selected_uuid\", \"config\": $config_json}")
-    if [ -z "$update_response" ] || ! echo "$update_response" | jq -e '.response.uuid' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
+    local update_payload update_response verify_json
+    update_payload=$(build_warp_update_payload "$selected_uuid" "$config_json")
+    update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "$update_payload")
+    verify_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
+    if [ -z "$verify_json" ] || \
+       ! echo "$verify_json" | jq -e '.outbounds[]? | select(.tag == "warp-out")' > /dev/null 2>&1 || \
+       ! echo "$verify_json" | jq -e '.routing.balancers[]? | select(.tag == "warp-fallback" and .fallbackTag == "DIRECT")' > /dev/null 2>&1 || \
+       ! echo "$verify_json" | jq -e '.routing.rules[]? | select(.ruleTag == "warp-full-route" and .balancerTag == "warp-fallback")' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: $(extract_warp_api_error "$update_response")${COLOR_RESET}"
         return 1
     fi
 
@@ -349,7 +411,7 @@ manage_warp_full_route() {
 manage_warp_add_config() {
     load_api_module
 
-    local domain_url="127.0.0.1:3000"
+    local domain_url="http://127.0.0.1:3000"
 
     echo -e ""
     echo -e "${COLOR_RED}${LANG[WARNING_LABEL]}${COLOR_RESET}"
@@ -370,21 +432,10 @@ manage_warp_add_config() {
     local selected_uuid
     selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG]}") || return 1
 
-    local config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
-    if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
-        return 1
-    fi
-
     local config_json
-    if echo "$config_data" | jq -e '.response.config' > /dev/null 2>&1; then
-        config_json=$(echo "$config_data" | jq -r '.response.config')
-    else
-        config_json=$(echo "$config_data" | jq -r '.config // ""')
-    fi
-
+    config_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
     if [ -z "$config_json" ] || [ "$config_json" == "null" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: No config found in response${COLOR_RESET}"
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Failed to load config profile${COLOR_RESET}"
         return 1
     fi
 
@@ -437,9 +488,14 @@ manage_warp_add_config() {
         config_json=$(echo "$config_json" | jq --argjson warp_rule "$warp_rule" '.routing.rules += [$warp_rule]' 2>/dev/null)
     fi
 
-    local update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "{\"uuid\": \"$selected_uuid\", \"config\": $config_json}")
-    if [ -z "$update_response" ] || ! echo "$update_response" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
+    local update_payload update_response verify_json
+    update_payload=$(build_warp_update_payload "$selected_uuid" "$config_json")
+    update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "$update_payload")
+    verify_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
+    if [ -z "$verify_json" ] || \
+       ! echo "$verify_json" | jq -e '.outbounds[]? | select(.tag == "warp-out")' > /dev/null 2>&1 || \
+       ! echo "$verify_json" | jq -e '.routing.rules[]? | select(.outboundTag == "warp-out" and ((.domain // []) | index("whoer.net")))' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: $(extract_warp_api_error "$update_response")${COLOR_RESET}"
         return 1
     fi
 
@@ -449,7 +505,7 @@ manage_warp_add_config() {
 manage_warp_delete_settings() {
     load_api_module
 
-    local domain_url="127.0.0.1:3000"
+    local domain_url="http://127.0.0.1:3000"
 
     echo -e ""
     echo -e "${COLOR_RED}${LANG[WARNING_LABEL]}${COLOR_RESET}"
@@ -470,21 +526,10 @@ manage_warp_delete_settings() {
     local selected_uuid
     selected_uuid=$(select_warp_node_profile "$token" "$domain_url" "${LANG[WARP_SELECT_CONFIG_DELETE]}") || return 1
 
-    local config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$selected_uuid" "$token")
-    if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
-        return 1
-    fi
-
     local config_json
-    if echo "$config_data" | jq -e '.response.config' > /dev/null 2>&1; then
-        config_json=$(echo "$config_data" | jq -r '.response.config')
-    else
-        config_json=$(echo "$config_data" | jq -r '.config // ""')
-    fi
-
+    config_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
     if [ -z "$config_json" ] || [ "$config_json" == "null" ]; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: No config found in response${COLOR_RESET}"
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Failed to load config profile${COLOR_RESET}"
         return 1
     fi
 
@@ -511,9 +556,20 @@ manage_warp_delete_settings() {
         echo -e "${COLOR_YELLOW}${LANG[WARP_REMOVED_FULL_ROUTE]}${COLOR_RESET}"
     fi
 
-    local update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "{\"uuid\": \"$selected_uuid\", \"config\": $config_json}")
-    if [ -z "$update_response" ] || ! echo "$update_response" | jq -e '.' > /dev/null 2>&1; then
-        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Invalid response${COLOR_RESET}"
+    local update_payload update_response verify_json
+    update_payload=$(build_warp_update_payload "$selected_uuid" "$config_json")
+    update_response=$(make_api_request "PATCH" "${domain_url}/api/config-profiles" "$token" "$update_payload")
+    verify_json=$(fetch_warp_profile_config "$token" "$selected_uuid" "$domain_url")
+    if [ -z "$verify_json" ]; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: Failed to verify updated config profile${COLOR_RESET}"
+        return 1
+    fi
+
+    if echo "$verify_json" | jq -e '.outbounds[]? | select(.tag == "warp-out")' > /dev/null 2>&1 || \
+       echo "$verify_json" | jq -e '.routing.rules[]? | select(.outboundTag == "warp-out" or (.ruleTag // "") == "warp-full-route" or (.balancerTag // "") == "warp-fallback")' > /dev/null 2>&1 || \
+       echo "$verify_json" | jq -e '.routing.balancers[]? | select(.tag == "warp-fallback")' > /dev/null 2>&1 || \
+       echo "$verify_json" | jq -e '.observatory.subjectSelector[]? | select(. == "warp-out")' > /dev/null 2>&1; then
+        echo -e "${COLOR_RED}${LANG[WARP_UPDATE_FAIL]}: $(extract_warp_api_error "$update_response")${COLOR_RESET}"
         return 1
     fi
 
