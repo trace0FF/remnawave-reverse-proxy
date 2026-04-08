@@ -104,6 +104,11 @@ fetch_warp_profile_config() {
     local profile_uuid="$2"
     local domain_url="${3:-http://127.0.0.1:3000}"
 
+    profile_uuid=$(printf '%s' "$profile_uuid" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    if [ -z "$profile_uuid" ]; then
+        return 1
+    fi
+
     local config_data
     config_data=$(make_api_request "GET" "${domain_url}/api/config-profiles/$profile_uuid" "$token")
     if [ -z "$config_data" ] || ! echo "$config_data" | jq -e '.' > /dev/null 2>&1; then
@@ -266,7 +271,7 @@ select_warp_node_profile() {
         return 1
     fi
 
-    echo -e ""
+    echo -e "" >&2
     echo -e "${COLOR_YELLOW}${selection_prompt}${COLOR_RESET}" >&2
     echo -e "" >&2
 
