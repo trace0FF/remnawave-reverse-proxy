@@ -27,6 +27,10 @@ manage_warp_native() {
                 return
             fi
             bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh)
+            local warp_install_status=$?
+            if [ "$warp_install_status" -eq 0 ]; then
+                ensure_warp_endpoint_connectivity
+            fi
             sleep 2
             log_clear
             manage_warp_native
@@ -93,6 +97,67 @@ cleanup_warp_config_json() {
             .
           end
     '
+}
+
+ensure_warp_endpoint_connectivity() {
+    local warp_conf="/etc/wireguard/warp.conf"
+    local warp_service="wg-quick@warp"
+    local endpoint_line endpoint_host original_endpoint backup_file
+    local -a candidate_ports=("2408" "500" "1701" "4500")
+
+    if [ ! -f "$warp_conf" ]; then
+        echo -e "${COLOR_YELLOW}${LANG[WARP_ENDPOINT_SKIP]}${COLOR_RESET}"
+        return 0
+    fi
+
+    if ! command -v wg > /dev/null 2>&1 || ! command -v systemctl > /dev/null 2>&1; then
+        echo -e "${COLOR_YELLOW}${LANG[WARP_ENDPOINT_SKIP]}${COLOR_RESET}"
+        return 0
+    fi
+
+    endpoint_line=$(awk -F' = ' '/^Endpoint = / {print $2; exit}' "$warp_conf")
+    endpoint_host="${endpoint_line%:*}"
+    if [ -z "$endpoint_host" ] || [ "$endpoint_host" = "$endpoint_line" ]; then
+        endpoint_host="engage.cloudflareclient.com"
+    fi
+
+    backup_file="${warp_conf}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "$warp_conf" "$backup_file"
+
+    echo -e "${COLOR_YELLOW}${LANG[WARP_ENDPOINT_CHECK]}${COLOR_RESET}"
+
+    local selected_port=""
+    local latest_handshake received_bytes
+    for port in "${candidate_ports[@]}"; do
+        printf "${COLOR_YELLOW}${LANG[WARP_ENDPOINT_TEST]}${COLOR_RESET}\n" "$port"
+        sed -i -E "s|^Endpoint = .*$|Endpoint = ${endpoint_host}:${port}|" "$warp_conf"
+
+        if ! systemctl restart "$warp_service" > /dev/null 2>&1; then
+            printf "${COLOR_RED}${LANG[WARP_ENDPOINT_TEST_FAIL]}${COLOR_RESET}\n" "$port"
+            continue
+        fi
+
+        sleep 12
+
+        latest_handshake=$(wg show warp latest-handshakes 2>/dev/null | awk 'NR==1 {print $2}')
+        received_bytes=$(wg show warp transfer 2>/dev/null | awk 'NR==1 {print $3}')
+
+        if [ -n "$latest_handshake" ] && [ "$latest_handshake" != "0" ] && \
+           [ -n "$received_bytes" ] && [ "$received_bytes" != "0" ]; then
+            selected_port="$port"
+            break
+        fi
+    done
+
+    if [ -n "$selected_port" ]; then
+        printf "${COLOR_GREEN}${LANG[WARP_ENDPOINT_SELECTED]}${COLOR_RESET}\n" "$selected_port"
+        return 0
+    fi
+
+    cp "$backup_file" "$warp_conf"
+    systemctl restart "$warp_service" > /dev/null 2>&1 || true
+    echo -e "${COLOR_RED}${LANG[WARP_ENDPOINT_RESTORE]}${COLOR_RESET}"
+    return 1
 }
 
 select_warp_node_profile() {
