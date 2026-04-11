@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="3.0.7"
+SCRIPT_VERSION="3.0.8"
 UPDATE_AVAILABLE=false
 DIR_REMNAWAVE="/usr/local/remnawave_reverse/"
 LANG_FILE="${DIR_REMNAWAVE}selected_language"
@@ -2385,6 +2385,7 @@ case $OPTION in
         ;;
     3)
         load_manage_panel_module
+        load_api_module
         show_manage_panel_menu
         ;;
     4)

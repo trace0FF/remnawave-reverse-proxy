@@ -1,6 +1,18 @@
 #!/bin/bash
 # Module: Manage Panel
 
+ensure_manage_panel_api_loaded() {
+    if declare -F get_panel_token > /dev/null 2>&1 && declare -F make_api_request > /dev/null 2>&1; then
+        return 0
+    fi
+
+    if declare -F load_api_module > /dev/null 2>&1; then
+        load_api_module
+    fi
+
+    declare -F get_panel_token > /dev/null 2>&1 && declare -F make_api_request > /dev/null 2>&1
+}
+
 show_manage_panel_menu() {
     echo -e ""
     echo -e "${COLOR_GREEN}${LANG[MENU_3]}${COLOR_RESET}"
@@ -215,6 +227,11 @@ view_logs() {
 setup_two_node_cascade() {
     local domain_url="127.0.0.1:3000"
     local token=""
+
+    if ! ensure_manage_panel_api_loaded; then
+        echo -e "${COLOR_RED}${LANG[CASCADE_TOKEN_ERROR]}${COLOR_RESET}"
+        return 1
+    fi
 
     echo -e "${COLOR_YELLOW}${LANG[CASCADE_CONFIRM]}${COLOR_RESET}"
     read confirm
