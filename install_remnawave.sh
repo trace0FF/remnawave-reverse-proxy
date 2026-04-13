@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="3.0.9"
+SCRIPT_VERSION="3.0.10"
 UPDATE_AVAILABLE=false
 DIR_REMNAWAVE="/usr/local/remnawave_reverse/"
 LANG_FILE="${DIR_REMNAWAVE}selected_language"
@@ -246,7 +246,7 @@ read_node_secret_key() {
     local line
     local payload=""
 
-    echo -n "$(question "${LANG[CERT_PROMPT]}")"
+    question "${LANG[CERT_PROMPT]}" >&2
     while IFS= read -r line; do
         line="${line%$'\r'}"
 
