@@ -166,8 +166,8 @@ x-logging: &logging
   logging:
     driver: json-file
     options:
-      max-size: 100m
-      max-file: 5
+      max-size: "100m"
+      max-file: "5"
 
 x-env: &env
   env_file: .env
@@ -424,7 +424,7 @@ installation_panel_node_caddy() {
     sleep 1
     cd /opt/remnawave
     ufw allow 80/tcp comment 'HTTP' > /dev/null 2>&1
-    docker compose up -d > /dev/null 2>&1 &
+    docker_compose up -d > /dev/null 2>&1 &
 
     spinner $! "${LANG[WAITING]}"
 
@@ -498,15 +498,15 @@ installation_panel_node_caddy() {
     # Stop and start Remnawave
     echo -e "${COLOR_YELLOW}${LANG[STOPPING_REMNAWAVE]}${COLOR_RESET}"
     sleep 1
-    docker compose down > /dev/null 2>&1 &
+    docker_compose down > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
 
     echo -e "${COLOR_YELLOW}${LANG[STARTING_PANEL_NODE]}${COLOR_RESET}"
     sleep 1
-    docker compose up -d > /dev/null 2>&1 &
+    docker_compose up -d > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
 
-    clear
+    safe_clear
 
     echo -e "${COLOR_YELLOW}=================================================${COLOR_RESET}"
     echo -e "${COLOR_GREEN}${LANG[INSTALL_COMPLETE]}${COLOR_RESET}"

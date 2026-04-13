@@ -162,8 +162,8 @@ x-logging: &logging
   logging:
     driver: json-file
     options:
-      max-size: 100m
-      max-file: 5
+      max-size: "100m"
+      max-file: "5"
 
 x-env: &env
   env_file: .env
@@ -445,7 +445,7 @@ EOL
     echo -e "${COLOR_YELLOW}${LANG[STARTING_PANEL]}${COLOR_RESET}"
     sleep 1
     cd /opt/remnawave
-    docker compose up -d > /dev/null 2>&1 &
+    docker_compose up -d > /dev/null 2>&1 &
 
     spinner $! "${LANG[WAITING]}"
 
@@ -511,15 +511,15 @@ EOL
     # Stop and start Remnawave Subscription Page
     echo -e "${COLOR_YELLOW}${LANG[STOPPING_REMNAWAVE_SUBSCRIPTION_PAGE]}${COLOR_RESET}"
     sleep 1
-    docker compose down remnawave-subscription-page > /dev/null 2>&1 &
+    docker_compose down remnawave-subscription-page > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
 
     echo -e "${COLOR_YELLOW}${LANG[STARTING_REMNAWAVE_SUBSCRIPTION_PAGE]}${COLOR_RESET}"
     sleep 1
-    docker compose up -d remnawave-subscription-page > /dev/null 2>&1 &
+    docker_compose up -d remnawave-subscription-page > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
 
-    clear
+    safe_clear
 
     echo -e "${COLOR_YELLOW}=================================================${COLOR_RESET}"
     echo -e "${COLOR_GREEN}${LANG[INSTALL_COMPLETE]}${COLOR_RESET}"

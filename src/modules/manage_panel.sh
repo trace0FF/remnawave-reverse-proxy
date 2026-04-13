@@ -122,7 +122,7 @@ start_panel_node() {
     else
         echo -e "${COLOR_YELLOW}${LANG[STARTING_PANEL_NODE]}...${COLOR_RESET}"
         sleep 1
-        docker compose up -d > /dev/null 2>&1 &
+        docker_compose up -d > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         echo -e "${COLOR_GREEN}${LANG[PANEL_RUN]}${COLOR_RESET}"
     fi
@@ -145,7 +145,7 @@ stop_panel_node() {
     else
         echo -e "${COLOR_YELLOW}${LANG[STOPPING_REMNAWAVE]}...${COLOR_RESET}"
         sleep 1
-        docker compose down > /dev/null 2>&1 &
+        docker_compose down > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         echo -e "${COLOR_GREEN}${LANG[PANEL_STOP]}${COLOR_RESET}"
     fi
@@ -166,7 +166,7 @@ update_panel_node() {
     echo -e "${COLOR_YELLOW}${LANG[UPDATING]}${COLOR_RESET}"
     sleep 1
 
-    images_before=$(docker compose config --images | sort -u)
+    images_before=$(docker_compose config --images | sort -u)
     if [ -n "$images_before" ]; then
         before=$(echo "$images_before" | xargs -I {} docker images -q {} | sort -u)
     else
@@ -174,12 +174,12 @@ update_panel_node() {
     fi
 
     tmpfile=$(mktemp)
-    docker compose pull > "$tmpfile" 2>&1 &
+    docker_compose pull > "$tmpfile" 2>&1 &
     spinner $! "${LANG[WAITING]}"
     pull_output=$(cat "$tmpfile")
     rm -f "$tmpfile"
 
-    images_after=$(docker compose config --images | sort -u)
+    images_after=$(docker_compose config --images | sort -u)
     if [ -n "$images_after" ]; then
         after=$(echo "$images_after" | xargs -I {} docker images -q {} | sort -u)
     else
@@ -189,10 +189,10 @@ update_panel_node() {
     if [ "$before" != "$after" ] || echo "$pull_output" | grep -q "Pull complete"; then
         echo -e ""
 	echo -e "${COLOR_YELLOW}${LANG[IMAGES_DETECTED]}${COLOR_RESET}"
-        docker compose down > /dev/null 2>&1 &
+        docker_compose down > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         sleep 5
-        docker compose up -d > /dev/null 2>&1 &
+        docker_compose up -d > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         sleep 1
         docker image prune -f > /dev/null 2>&1
@@ -221,7 +221,7 @@ view_logs() {
     fi
 
     echo -e "${COLOR_YELLOW}${LANG[VIEW_LOGS]}${COLOR_RESET}"
-    docker compose logs -f -t
+    docker_compose logs -f -t
 }
 
 setup_two_node_cascade() {
@@ -625,10 +625,10 @@ open_panel_access() {
             exit 1
         fi
 
-        docker compose down remnawave-nginx > /dev/null 2>&1 &
+        docker_compose down remnawave-nginx > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
 
-        docker compose up -d remnawave-nginx > /dev/null 2>&1 &
+        docker_compose up -d remnawave-nginx > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
 
         ufw allow from 0.0.0.0/0 to any port 8443 proto tcp > /dev/null 2>&1
@@ -672,10 +672,10 @@ open_panel_access() {
         sed -i "s|https://{\$PANEL_DOMAIN} {|https://{\$PANEL_DOMAIN}:8443 {|g" "$dir/Caddyfile"
         sed -i "/https:\/\/{\$PANEL_DOMAIN}:8443 {/,/^}/ { /bind unix\/{\$CADDY_SOCKET_PATH}/d }" "$dir/Caddyfile"
 
-        docker compose down remnawave-caddy > /dev/null 2>&1 &
+        docker_compose down remnawave-caddy > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
 
-        docker compose up -d remnawave-caddy > /dev/null 2>&1 &
+        docker_compose up -d remnawave-caddy > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
 
         ufw allow from 0.0.0.0/0 to any port 8443 proto tcp > /dev/null 2>&1
@@ -736,9 +736,9 @@ close_panel_access() {
                 exit 1
             fi
 
-            docker compose down remnawave-nginx > /dev/null 2>&1 &
+            docker_compose down remnawave-nginx > /dev/null 2>&1 &
             spinner $! "${LANG[WAITING]}"
-            docker compose up -d remnawave-nginx > /dev/null 2>&1 &
+            docker_compose up -d remnawave-nginx > /dev/null 2>&1 &
             spinner $! "${LANG[WAITING]}"
         else
             echo -e "${COLOR_YELLOW}${LANG[PORT_8443_NOT_CONFIGURED]}${COLOR_RESET}"
@@ -770,9 +770,9 @@ close_panel_access() {
 
             sed -i "s|redir https://{\$PANEL_DOMAIN}:8443{uri} permanent|redir https://{\$PANEL_DOMAIN}{uri} permanent|g" "$dir/Caddyfile"
 
-            docker compose down remnawave-caddy > /dev/null 2>&1 &
+            docker_compose down remnawave-caddy > /dev/null 2>&1 &
             spinner $! "${LANG[WAITING]}"
-            docker compose up -d remnawave-caddy > /dev/null 2>&1 &
+            docker_compose up -d remnawave-caddy > /dev/null 2>&1 &
             spinner $! "${LANG[WAITING]}"
         else
             echo -e "${COLOR_YELLOW}${LANG[PORT_8443_NOT_CONFIGURED]}${COLOR_RESET}"

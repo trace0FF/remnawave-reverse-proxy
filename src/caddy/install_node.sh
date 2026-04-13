@@ -28,16 +28,12 @@ install_node_caddy() {
         fi
     done
 
-    echo -n "$(question "${LANG[CERT_PROMPT]}")"
-    CERTIFICATE=""
-    while IFS= read -r line; do
-        if [ -z "$line" ]; then
-            if [ -n "$CERTIFICATE" ]; then
-                break
-            fi
-        else
-            CERTIFICATE="$CERTIFICATE$line\n"
+    while true; do
+        CERTIFICATE=$(read_node_secret_key)
+        if validate_node_secret_key "$CERTIFICATE"; then
+            break
         fi
+        echo -e "${COLOR_RED}${LANG[INVALID_SECRET_KEY_PAYLOAD]}${COLOR_RESET}"
     done
 
     echo -e "${COLOR_YELLOW}${LANG[CERT_CONFIRM]}${COLOR_RESET}"
@@ -61,8 +57,8 @@ x-logging: &logging
   logging:
     driver: json-file
     options:
-      max-size: 100m
-      max-file: 5
+      max-size: "100m"
+      max-file: "5"
 
 services:
     caddy:
@@ -97,7 +93,7 @@ services:
         - NET_ADMIN
       environment:
         - NODE_PORT=2222
-        - SECRET_KEY=$(echo -e "$CERTIFICATE")
+        - SECRET_KEY=${CERTIFICATE}
       volumes:
         - /dev/shm:/dev/shm:rw
 
@@ -150,7 +146,7 @@ installation_node_caddy() {
     echo -e "${COLOR_YELLOW}${LANG[STARTING_NODE]}${COLOR_RESET}"
     sleep 3
     cd /opt/remnanode
-    docker compose up -d > /dev/null 2>&1 &
+    docker_compose up -d > /dev/null 2>&1 &
 
     spinner $! "${LANG[WAITING]}"
 

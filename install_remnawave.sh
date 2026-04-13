@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="3.0.8"
+SCRIPT_VERSION="3.0.9"
 UPDATE_AVAILABLE=false
 DIR_REMNAWAVE="/usr/local/remnawave_reverse/"
 LANG_FILE="${DIR_REMNAWAVE}selected_language"
@@ -207,6 +207,76 @@ reading() {
 error() {
     echo -e "${COLOR_RED}$*${COLOR_RESET}"
     exit 1
+}
+
+safe_clear() {
+    clear 2>/dev/null || true
+}
+
+docker_compose_cli() {
+    if command docker compose version >/dev/null 2>&1; then
+        printf '%s' "docker compose"
+        return 0
+    fi
+
+    if command -v docker-compose >/dev/null 2>&1; then
+        printf '%s' "docker-compose"
+        return 0
+    fi
+
+    return 1
+}
+
+docker_compose() {
+    if command docker compose version >/dev/null 2>&1; then
+        command docker compose "$@"
+        return $?
+    fi
+
+    if command -v docker-compose >/dev/null 2>&1; then
+        command docker-compose "$@"
+        return $?
+    fi
+
+    echo -e "${COLOR_RED}${LANG[ERROR_DOCKER_COMPOSE_NOT_INSTALLED]}${COLOR_RESET}" >&2
+    return 1
+}
+
+read_node_secret_key() {
+    local line
+    local payload=""
+
+    echo -n "$(question "${LANG[CERT_PROMPT]}")"
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+
+        if [ -z "$line" ]; then
+            if [ -n "$payload" ]; then
+                break
+            fi
+            continue
+        fi
+
+        payload="${payload}${line}"
+    done
+
+    printf '%s' "$payload"
+}
+
+validate_node_secret_key() {
+    local payload="$1"
+
+    if [ -z "$payload" ]; then
+        return 1
+    fi
+
+    printf '%s' "$payload" | base64 -d 2>/dev/null | jq -e '
+        type == "object" and
+        (.nodeCertPem | type == "string" and length > 0) and
+        (.nodeKeyPem | type == "string" and length > 0) and
+        (.caCertPem | type == "string" and length > 0) and
+        (.jwtPublicKey | type == "string" and length > 0)
+    ' >/dev/null 2>&1
 }
 
 check_os() {
@@ -428,13 +498,13 @@ remove_script() {
 
             if [ -d "/opt/remnawave" ]; then
                 cd /opt/remnawave || { echo -e "${COLOR_RED}${LANG[CHANGE_DIR_FAILED]} /opt/remnawave${COLOR_RESET}"; exit 1; }
-                docker compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
+                docker_compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
                 spinner $! "${LANG[WAITING]}"
                 rm -rf /opt/remnawave 2>/dev/null
             fi
             if [ -d "/opt/remnanode" ]; then
                 cd /opt/remnanode || { echo -e "${COLOR_RED}${LANG[CHANGE_DIR_FAILED]} /opt/remnanode${COLOR_RESET}"; exit 1; }
-                docker compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
+                docker_compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
                 spinner $! "${LANG[WAITING]}"
                 rm -rf /opt/remnanode 2>/dev/null
             fi
@@ -868,13 +938,13 @@ choose_reinstall_type() {
 reinstall_remnawave() {
     if [ -d "/opt/remnawave" ]; then
         cd /opt/remnawave || return
-        docker compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
+        docker_compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         rm -rf /opt/remnawave 2>/dev/null
     fi
     if [ -d "/opt/remnanode" ]; then
         cd /opt/remnanode || return
-        docker compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
+        docker_compose down -v --rmi all --remove-orphans > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
         rm -rf /opt/remnanode 2>/dev/null
     fi
@@ -1098,9 +1168,9 @@ manage_sub_page_upload() {
     sed -i -e '/^volumes:/i\' -e '' "$docker_compose_file"
 
     cd /opt/remnawave || return 1
-    docker compose down remnawave-subscription-page > /dev/null 2>&1 &
+    docker_compose down remnawave-subscription-page > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
-    docker compose up -d remnawave-subscription-page > /dev/null 2>&1 &
+    docker_compose up -d remnawave-subscription-page > /dev/null 2>&1 &
     spinner $! "${LANG[WAITING]}"
     echo -e "${COLOR_GREEN}${LANG[SUB_PAGE_UPDATED_SUCCESS]}${COLOR_RESET}"
 }
@@ -1218,9 +1288,9 @@ edit_branding() {
         
         # Restart subscription page container
         cd /opt/remnawave || return 1
-        docker compose down remnawave-subscription-page > /dev/null 2>&1 &
+        docker_compose down remnawave-subscription-page > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
-        docker compose up -d remnawave-subscription-page > /dev/null 2>&1 &
+        docker_compose up -d remnawave-subscription-page > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
     fi
 }
@@ -1321,9 +1391,9 @@ delete_applications() {
         
         # Restart subscription page container
         cd /opt/remnawave || return 1
-        docker compose down remnawave-subscription-page > /dev/null 2>&1 &
+        docker_compose down remnawave-subscription-page > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
-        docker compose up -d remnawave-subscription-page > /dev/null 2>&1 &
+        docker_compose up -d remnawave-subscription-page > /dev/null 2>&1 &
         spinner $! "${LANG[WAITING]}"
     else
         echo -e "${COLOR_YELLOW}${LANG[EXIT]}${COLOR_RESET}"
@@ -1453,6 +1523,14 @@ install_packages() {
         return 1
     fi
 
+    if ! docker_compose_cli >/dev/null 2>&1; then
+        if ! apt-get install -y docker-compose-plugin >/dev/null 2>&1 && \
+           ! apt-get install -y docker-compose >/dev/null 2>&1; then
+            echo -e "${COLOR_RED}${LANG[ERROR_DOCKER_COMPOSE_NOT_INSTALLED]}${COLOR_RESET}" >&2
+            return 1
+        fi
+    fi
+
     # BBR
     if ! grep -q "net.core.default_qdisc = fq" /etc/sysctl.conf; then
         echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
@@ -1478,7 +1556,7 @@ install_packages() {
 
     touch ${DIR_REMNAWAVE}install_packages
     echo -e "${COLOR_GREEN}${LANG[SUCCESS_INSTALL]}${COLOR_RESET}"
-    clear
+    safe_clear
 }
 
 extract_domain() {
@@ -2109,7 +2187,9 @@ fix_letsencrypt_structure() {
         sed -i "s|^privkey =.*|privkey = $privkey_path|" "$renewal_conf"
     fi
 
-    local expected_hook="renew_hook = sh -c 'cd /opt/remnawave && docker compose down remnawave-nginx && docker compose up -d remnawave-nginx && docker compose exec remnawave-nginx nginx -s reload'"
+    local compose_cli
+    compose_cli=$(docker_compose_cli) || return 1
+    local expected_hook="renew_hook = sh -c 'cd /opt/remnawave && $compose_cli down remnawave-nginx && $compose_cli up -d remnawave-nginx && $compose_cli exec remnawave-nginx nginx -s reload'"
     sed -i '/^renew_hook/d' "$renewal_conf"
     echo "$expected_hook" >> "$renewal_conf"
 
@@ -2249,7 +2329,9 @@ handle_certificates() {
 
     local cron_command
     if [ "$cert_method" == "2" ]; then
-        cron_command="ufw allow 80 && /usr/bin/certbot renew --quiet && ufw delete allow 80 && ufw reload && cd $target_dir && docker compose down && docker compose up"
+        local compose_cli
+        compose_cli=$(docker_compose_cli) || return 1
+        cron_command="ufw allow 80 && /usr/bin/certbot renew --quiet && ufw delete allow 80 && ufw reload && cd $target_dir && $compose_cli down && $compose_cli up"
     else
         cron_command="/usr/bin/certbot renew --quiet"
     fi
@@ -2268,7 +2350,9 @@ handle_certificates() {
 
     for domain in "${!unique_domains[@]}"; do
         if [ -f "/etc/letsencrypt/renewal/$domain.conf" ]; then
-            desired_hook="renew_hook = sh -c 'cd $target_dir && docker compose down remnawave-nginx && docker compose up -d remnawave-nginx'"
+            local compose_cli
+            compose_cli=$(docker_compose_cli) || return 1
+            desired_hook="renew_hook = sh -c 'cd $target_dir && $compose_cli down remnawave-nginx && $compose_cli up -d remnawave-nginx'"
             if ! grep -q "renew_hook" "/etc/letsencrypt/renewal/$domain.conf"; then
                 echo "$desired_hook" >> "/etc/letsencrypt/renewal/$domain.conf"
             elif ! grep -Fx "$desired_hook" "/etc/letsencrypt/renewal/$domain.conf"; then

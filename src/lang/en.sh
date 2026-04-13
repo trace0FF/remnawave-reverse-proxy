@@ -272,7 +272,9 @@ LANG[SELFSTEAL]="Enter the selfsteal domain for the node specified during panel 
 LANG[PANEL_IP_PROMPT]="Enter the IP address of the panel to establish a connection between the panel and the node:"
 LANG[IP_ERROR]="Enter a valid IP address in the format X.X.X.X (e.g., 192.168.1.1)"
 LANG[CERT_PROMPT]="Enter the node Secret Key from the node edit card (paste the content and press Enter twice):"
-LANG[CERT_CONFIRM]="Are you sure the certificate is correct? (y/n):"
+LANG[CERT_CONFIRM]="Are you sure the Secret Key is correct? (y/n):"
+LANG[INVALID_SECRET_KEY_PAYLOAD]="The node Secret Key is corrupted or has an invalid format. Copy it again from the node card."
+LANG[ERROR_DOCKER_COMPOSE_NOT_INSTALLED]="Docker Compose is not installed or unavailable"
 LANG[ABORT_MESSAGE]="Installation aborted by user"
 LANG[SUCCESS_MESSAGE]="Node successfully connected"
 #Node Check

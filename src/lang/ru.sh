@@ -268,7 +268,9 @@ LANG[SELFSTEAL]="Введите selfsteal домен для ноды, котор
 LANG[PANEL_IP_PROMPT]="Введите IP адрес панели, чтобы установить соединение между панелью и ноды:"
 LANG[IP_ERROR]="Введите корректный IP-адрес в формате X.X.X.X (например, 192.168.1.1)"
 LANG[CERT_PROMPT]="Введите Secret Key ноды, который находится в карточке редактирования ноды (вставьте содержимое и 2 раза нажмите Enter):"
-LANG[CERT_CONFIRM]="Вы уверены, что сертификат правильный? (y/n):"
+LANG[CERT_CONFIRM]="Вы уверены, что Secret Key правильный? (y/n):"
+LANG[INVALID_SECRET_KEY_PAYLOAD]="Secret Key ноды повреждён или имеет неверный формат. Скопируйте его заново из карточки ноды."
+LANG[ERROR_DOCKER_COMPOSE_NOT_INSTALLED]="Docker Compose не установлен или недоступен"
 LANG[ABORT_MESSAGE]="Установка прервана пользователем"
 LANG[SUCCESS_MESSAGE]="Нода успешно подключена"
 #Node Check
